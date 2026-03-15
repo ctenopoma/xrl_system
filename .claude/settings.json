@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip show:*)",
+      "Bash(python -c \":*)",
+      "Bash(pip install:*)",
+      "Bash(python main.py --help)",
+      "Bash(curl -s \"https://api.github.com/repos/arktools/jsbsim/contents/aircraft/f16\")",
+      "Bash(python -c \"import json,sys; files=[f[''''name''''] for f in json.load\\(sys.stdin\\)]; print\\(''''\\\\n''''.join\\(files\\)\\)\")",
+      "Bash(curl -s \"https://api.github.com/repos/arktools/jsbsim/contents/aircraft/f16/Systems\")"
+    ],
+    "additionalDirectories": [
+      "d:\\work_space\\xrl_system"
+    ]
+  }
+}

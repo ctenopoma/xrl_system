@@ -1,0 +1,16 @@
+[project]
+name = "xrl-system"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "geographiclib",
+    "gymnasium",
+    "icecream",
+    "jsbsim==1.1.6",
+    "pymap3d",
+    "setproctitle",
+    "torch",
+    "wandb",
+]
