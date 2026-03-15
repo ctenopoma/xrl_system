@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s http://localhost:8088/health)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(k, d[''''results''''][k][''''eval'''']\\) for k in d[''''results'''']]\")",
+      "Bash(python -c \":*)"
+    ]
+  }
+}

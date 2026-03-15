@@ -2,4 +2,5 @@
 __pycache__/
 *.pyc
 
+# LAG は独自 git リポジトリのため除外（LAG内の変更は LAG の git で管理）
 LAG/*
