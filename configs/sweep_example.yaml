@@ -1,0 +1,51 @@
+# ============================================================
+# XRL System — スイープ実験設定例
+# ============================================================
+# リスト形式のパラメータ → スイープ軸 (全組み合わせ)
+# 単一値のパラメータ    → 全 combo で固定
+#
+# 使い方:
+#   python run_experiment.py --config configs/sweep_example.yaml
+#   python run_experiment.py --config configs/sweep_example.yaml --dry-run
+# ============================================================
+
+# ---- 共通設定 ------------------------------------------------
+base_model: Qwen/Qwen2.5-7B-Instruct
+csv: data/trajectory_log.csv
+
+# ---- 評価設定 ------------------------------------------------
+eval_steps: [50, 100, 150]  # 評価に使うステップ (null の場合 eval_sample を使用)
+eval_sample: null            # null の場合 eval_steps が優先
+eval_strategy: zero_shot
+
+# ---- スイープ軸 (リストにした項目が全組み合わせで実行される) ----
+
+# プロンプトテンプレート
+template: [v1_basic, v1_combat_only]
+
+# ラベル生成手法
+label_source: [cot, mcts]
+
+# 品質フィルタ (Soundness+Fidelity の最低スコア)
+min_score: [0.0, 3.0]
+
+# LoRA の rank
+lora_rank: [8, 16]
+
+# ---- 固定パラメータ ------------------------------------------
+
+# MCTS イテレーション数 (label_source=mcts 時のみ有効)
+mcts_iterations: 4
+
+# 学習エポック数
+num_epochs: 3
+
+# LoRA alpha (null の場合 rank × 2 が自動設定)
+lora_alpha: null
+
+# バッチサイズ
+batch_size: 4
+grad_accum: 4
+
+# 最大シーケンス長
+max_length: 1024
