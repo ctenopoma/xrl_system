@@ -2,6 +2,13 @@
 
 学習なし (外部 API) と 学習あり (ローカル LoRA) の両方に対応する。
 どちらのバックエンドも simple_prompt(system, user) → str インターフェースを持つ。
+
+対応戦略:
+    zero_shot : テンプレートをそのまま使用
+    cot       : Chain-of-Thought サフィックスを付加
+    mcts      : MCTSXRL による Generator/Critic/Refiner/Evaluator の反復自己改善
+    sysllm    : SySLLM によるエピソード全体要約を事前情報として注入し説明生成
+    agent     : TalkToAgent によるマルチエージェント (Coordinator/Coder/Debugger/Explainer) 推論
 """
 
 from __future__ import annotations
@@ -11,7 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
 
-from modules.data_loader import StepContext
+from modules.data_loader import DataLoader, StepContext
 from modules.llm_client import LLMClient
 from modules.prompt_template import PromptTemplate
 
@@ -23,11 +30,17 @@ from modules.prompt_template import PromptTemplate
 class PromptingStrategy(str, Enum):
     """推論時のプロンプト戦略。
 
-    ZERO_SHOT:  テンプレートそのまま
-    COT:        "Chain-of-Thought で推論してから結論をまとめてください" を追加
+    ZERO_SHOT : テンプレートそのまま
+    COT       : Chain-of-Thought サフィックスを追加
+    MCTS      : MCTSXRL による反復自己改善 (Generator/Critic/Refiner/Evaluator)
+    SYSLLM    : エピソード全体要約を事前情報として注入して説明生成
+    AGENT     : TalkToAgent マルチエージェント (Coordinator/Coder/Debugger/Explainer)
     """
     ZERO_SHOT = "zero_shot"
-    COT = "cot"
+    COT       = "cot"
+    MCTS      = "mcts"
+    SYSLLM    = "sysllm"
+    AGENT     = "agent"
 
 
 _COT_SUFFIX = (
@@ -55,6 +68,13 @@ class InferenceEngine:
         backend = LocalLoRABackend(adapter_path="models/run_xxx/adapter")
         engine  = InferenceEngine(backend, tpl)
         explanation = engine.generate(context)
+
+        # MCTS / SySLLM / Agent 戦略 (LLMClient + DataLoader が必要)
+        engine = InferenceEngine(llm, tpl,
+                                 strategy=PromptingStrategy.MCTS,
+                                 loader=loader,
+                                 mcts_iterations=4)
+        explanation = engine.generate(context)
     """
 
     def __init__(
@@ -62,10 +82,26 @@ class InferenceEngine:
         llm: Union[LLMClient, "LocalLoRABackend"],
         template: PromptTemplate,
         strategy: PromptingStrategy = PromptingStrategy.ZERO_SHOT,
+        loader: Optional[DataLoader] = None,
+        mcts_iterations: int = 4,
     ) -> None:
+        """
+        Args:
+            llm:             推論バックエンド (LLMClient or LocalLoRABackend)
+            template:        プロンプトテンプレート
+            strategy:        プロンプト戦略
+            loader:          DataLoader (mcts / sysllm / agent 戦略で必要)
+            mcts_iterations: MCTS 戦略のイテレーション数 (デフォルト: 4)
+        """
         self.llm = llm
         self.template = template
         self.strategy = strategy
+        self.loader = loader
+        self.mcts_iterations = mcts_iterations
+
+        _requires_loader = {PromptingStrategy.MCTS, PromptingStrategy.SYSLLM, PromptingStrategy.AGENT}
+        if strategy in _requires_loader and loader is None:
+            raise ValueError(f"strategy='{strategy.value}' には loader が必要です。")
 
     # ------------------------------------------------------------------
     # 公開API
@@ -80,16 +116,25 @@ class InferenceEngine:
 
         Args:
             context:    DataLoader.get_step_context() の返り値
-            prior_info: 事前情報 (template.config.prior_info_slot_enabled=True の時のみ有効)
+            prior_info: 事前情報 (zero_shot / cot 戦略かつ
+                        template.config.prior_info_slot_enabled=True の時のみ有効)
 
         Returns:
             生成された説明テキスト
         """
-        system, user = self.template.format_step(context, prior_info)
+        if self.strategy == PromptingStrategy.MCTS:
+            return self._generate_mcts(context)
 
+        if self.strategy == PromptingStrategy.SYSLLM:
+            return self._generate_sysllm(context)
+
+        if self.strategy == PromptingStrategy.AGENT:
+            return self._generate_agent(context)
+
+        # zero_shot / cot
+        system, user = self.template.format_step(context, prior_info)
         if self.strategy == PromptingStrategy.COT:
             user += _COT_SUFFIX
-
         return self.llm.simple_prompt(system, user)
 
     def to_dict(self) -> dict:
@@ -99,6 +144,50 @@ class InferenceEngine:
             "strategy": self.strategy.value,
             "model": getattr(self.llm, "model", "unknown"),
         }
+
+    # ------------------------------------------------------------------
+    # 戦略別プライベートメソッド
+    # ------------------------------------------------------------------
+
+    def _generate_mcts(self, context: StepContext) -> str:
+        """MCTSXRL による反復自己改善で説明を生成する。"""
+        from modules.mcts_xrl import MCTSXRL
+
+        mcts = MCTSXRL(self.llm, self.loader, iterations=self.mcts_iterations)
+        result = mcts.explain_mcts(context.step)
+        return result["explanation"]
+
+    def _generate_sysllm(self, context: StepContext) -> str:
+        """エピソード全体要約を事前情報として注入し説明を生成する。
+
+        SySLLM でエピソード全体を要約したうえで、その要約を prior_info として
+        v2_with_prior テンプレートに注入して per-step の説明を生成する。
+        テンプレートが prior_info_slot_enabled でない場合はサフィックスとして付加する。
+        """
+        from modules.sysllm import SySLLM
+
+        sys_result = SySLLM(self.llm, self.loader).analyze()
+        summary = sys_result.get("overall_summary", "")
+
+        if self.template.config.prior_info_slot_enabled:
+            system, user = self.template.format_step(context, prior_info=summary)
+        else:
+            system, user = self.template.format_step(context)
+            user += f"\n\n【エピソード全体要約】\n{summary}"
+
+        return self.llm.simple_prompt(system, user)
+
+    def _generate_agent(self, context: StepContext) -> str:
+        """TalkToAgent マルチエージェントで説明を生成する。"""
+        from modules.talktoagent import TalkToAgent
+
+        query = (
+            f"Step {context.step} において、エージェントはなぜこの行動を選択したのか、"
+            "センサーデータと操舵入力の関係を具体的に説明してください。"
+        )
+        agent = TalkToAgent(self.llm, self.loader)
+        result = agent.answer(query)
+        return result["explanation"]
 
 
 # ------------------------------------------------------------------

@@ -29,6 +29,18 @@ python evaluate_baseline.py --steps 50 100 150
 python evaluate_baseline.py --steps 50 100 150 \
     --template v1_combat_only --strategy cot
 
+# MCTS 戦略 (Generator/Critic/Refiner/Evaluator の反復自己改善)
+python evaluate_baseline.py --steps 50 100 150 \
+    --strategy mcts --mcts-iterations 4
+
+# SySLLM 戦略 (エピソード全体要約を事前情報として注入)
+python evaluate_baseline.py --steps 50 100 150 \
+    --strategy sysllm
+
+# Agent 戦略 (TalkToAgent マルチエージェント: Coordinator/Coder/Debugger/Explainer)
+python evaluate_baseline.py --steps 50 100 150 \
+    --strategy agent
+
 # ランダムに 20 ステップをサンプリングして評価
 python evaluate_baseline.py --sample 20
 
@@ -36,10 +48,23 @@ python evaluate_baseline.py --sample 20
 python evaluate_baseline.py --steps 100 150 \
     --template v1_basic v1_combat_only v2_with_prior
 
-# 事前情報あり (SySLLM 要約を注入)
+# 事前情報あり (SySLLM 要約を注入, zero_shot / cot 戦略向け)
 python evaluate_baseline.py --steps 50 100 150 \
     --template v2_with_prior --prior-info sysllm
 ```
+
+利用可能な `--strategy` 一覧:
+
+| 戦略 | 概要 |
+|------|------|
+| `zero_shot` | テンプレートをそのまま使用 |
+| `cot` | Chain-of-Thought サフィックスを付加 |
+| `mcts` | MCTSXRL による反復自己改善 (Generator/Critic/Refiner/Evaluator) |
+| `sysllm` | エピソード全体要約を事前情報として注入して per-step 説明を生成 |
+| `agent` | TalkToAgent マルチエージェント (Coordinator/Coder/Debugger/Explainer) |
+
+> **注意**: `mcts` / `sysllm` / `agent` は `--backend local` (LoRA) では使用不可。
+> これらは LLMClient (外部 API) を直接使用する。
 
 結果は `results/baseline/baseline_summary.csv` に **追記** される。
 
