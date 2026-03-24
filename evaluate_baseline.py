@@ -314,7 +314,7 @@ def _save(args: argparse.Namespace, steps: list[int], all_results: list[dict]) -
     steps_csv = out_dir / f"baseline_steps_{ts}.csv"
     step_fields = [
         "run_at", "model", "backend", "template_id", "strategy", "prior_info_mode",
-        "step", "soundness", "fidelity", "total", "reason",
+        "step", "soundness", "fidelity", "total", "reason", "explanation",
     ]
     with steps_csv.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=step_fields)
@@ -337,6 +337,7 @@ def _save(args: argparse.Namespace, steps: list[int], all_results: list[dict]) -
                     "fidelity":        fi,
                     "total":           s + fi,
                     "reason":          ev.get("reason", ""),
+                    "explanation":     sr.get("explanation", ""),
                 })
     print(f"\n[保存完了] {steps_csv}  (ステップ詳細)")
 
