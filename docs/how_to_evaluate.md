@@ -128,7 +128,24 @@ python compare_results.py \
     --show-baseline-only
 ```
 
-出力される `comparison_report.md` の構成:
+ステップ詳細ファイル (`baseline_steps_<ts>.csv`) の列構成:
+
+| 列 | 内容 |
+|----|------|
+| `run_at` | 実行日時 (UTC) |
+| `model` | 推論に使用したモデル名またはアダプタパス |
+| `backend` | `external` = 外部 API / `local` = LoRA |
+| `template_id` | 使用したプロンプトテンプレート |
+| `strategy` | `zero_shot` / `cot` |
+| `prior_info_mode` | `none` / `sysllm` |
+| `step` | 評価したステップ番号 |
+| `soundness` | 行動の妥当性スコア (0–2) |
+| `fidelity` | 方針との一致度スコア (0–2) |
+| `total` | soundness + fidelity (0–4) |
+| `reason` | Judge の採点理由テキスト |
+| `explanation` | **LLM が生成した行動説明テキスト** (学習前後の比較に使用) |
+
+サマリーファイル (`baseline_summary.csv`) の列構成:
 
 | 列 | 内容 |
 |----|------|
@@ -136,8 +153,8 @@ python compare_results.py \
 | `template_id` | 使用したプロンプトテンプレート |
 | `strategy` | `zero_shot` / `cot` |
 | `prior_info_mode` | `none` / `sysllm` |
-| `soundness` | 行動の妥当性スコア (平均) |
-| `fidelity` | 方針との一致度スコア (平均) |
+| `soundness_mean` | 行動の妥当性スコア (平均) |
+| `fidelity_mean` | 方針との一致度スコア (平均) |
 | `total_mean` | (soundness + fidelity) / 2 |
 | `vs baseline` | LoRA 適用後の total_mean の差分 |
 
