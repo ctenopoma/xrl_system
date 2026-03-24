@@ -339,7 +339,7 @@ xrl_system/
 ├── modules/
 │   ├── prompt_template.py    ✅ 実装済み
 │   ├── inference_engine.py   ✅ 実装済み (外部 API のみ)
-│   ├── dataset_builder.py    🔲 Step 2
+│   ├── dataset_builder.py    ✅ 実装済み
 │   ├── lora_trainer.py       🔲 Step 3
 │   ├── llm_client.py         ✅
 │   ├── evaluator.py          ✅
@@ -348,9 +348,9 @@ xrl_system/
 │   ├── sysllm.py             ✅
 │   └── talktoagent.py        ✅
 ├── evaluate_baseline.py      ✅ 実装済み
-├── build_dataset.py          🔲 Step 2 (CLI エントリーポイント)
+├── build_dataset.py          ✅ 実装済み
 ├── train_lora.py             🔲 Step 3 (CLI エントリーポイント)
-├── datasets/                 🔲 Step 2 で生成
+├── datasets/                 (build_dataset.py 実行で生成)
 ├── models/                   🔲 Step 3 で生成
 ├── results/baseline/         ✅ evaluate_baseline.py が出力
 └── docs/

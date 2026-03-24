@@ -5,7 +5,7 @@
 | ステップ | 内容                         | 状態   |
 |---------|------------------------------|--------|
 | Step 1  | PromptTemplate / InferenceEngine / baseline 評価 | ✅ 完了 |
-| Step 2  | DatasetBuilder (学習データ生成) | 🔲 未着手 |
+| Step 2  | DatasetBuilder (学習データ生成) | ✅ 完了 |
 | Step 3  | LoRA Trainer                  | 🔲 未着手 |
 | Step 4  | LocalLoRA Backend (学習済み推論) | 🔲 未着手 |
 | Step 5  | 実験管理 (config sweep / 結果比較) | 🔲 未着手 |
@@ -45,7 +45,7 @@ uv run python evaluate_baseline.py --steps 50 100 150 \
 
 ---
 
-## Step 2 — DatasetBuilder (学習データ生成) 🔲
+## Step 2 — DatasetBuilder (学習データ生成) ✅
 
 ### 目的
 
