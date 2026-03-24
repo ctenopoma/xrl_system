@@ -338,7 +338,7 @@ uv run python evaluate_baseline.py --sample 20 \
 xrl_system/
 ├── modules/
 │   ├── prompt_template.py    ✅ 実装済み
-│   ├── inference_engine.py   ✅ 実装済み (外部 API のみ)
+│   ├── inference_engine.py   ✅ 実装済み (ExternalAPI + LocalLoRABackend)
 │   ├── dataset_builder.py    ✅ 実装済み
 │   ├── lora_trainer.py       ✅ 実装済み
 │   ├── llm_client.py         ✅

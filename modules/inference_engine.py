@@ -1,13 +1,15 @@
-"""InferenceEngine - PromptTemplate + LLMClient を統合した推論レイヤー。
+"""InferenceEngine - PromptTemplate + LLMClient / LocalLoRABackend を統合した推論レイヤー。
 
-学習なし (外部 API) と 学習あり (ローカル LoRA) の両方に対応できる設計。
-現時点では外部 API モードのみ実装。
+学習なし (外部 API) と 学習あり (ローカル LoRA) の両方に対応する。
+どちらのバックエンドも simple_prompt(system, user) → str インターフェースを持つ。
 """
 
 from __future__ import annotations
 
+import json
 from enum import Enum
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Union
 
 from modules.data_loader import StepContext
 from modules.llm_client import LLMClient
@@ -39,22 +41,25 @@ _COT_SUFFIX = (
 # ------------------------------------------------------------------
 
 class InferenceEngine:
-    """PromptTemplate + LLMClient を組み合わせた推論エンジン。
+    """PromptTemplate + バックエンド (LLMClient or LocalLoRABackend) を組み合わせた推論エンジン。
 
     使い方::
 
+        # 外部 API (学習なし baseline)
         tpl    = PromptTemplate.from_preset("v1_basic")
         engine = InferenceEngine(llm, tpl, strategy=PromptingStrategy.ZERO_SHOT)
         explanation = engine.generate(context)
 
-        # 事前情報を注入する場合 (v2_with_prior テンプレートが必要)
-        engine2 = InferenceEngine(llm, PromptTemplate.from_preset("v2_with_prior"))
-        explanation = engine2.generate(context, prior_info="エピソード要約: ...")
+        # ローカル LoRA (学習後)
+        from modules.inference_engine import LocalLoRABackend
+        backend = LocalLoRABackend(adapter_path="models/run_xxx/adapter")
+        engine  = InferenceEngine(backend, tpl)
+        explanation = engine.generate(context)
     """
 
     def __init__(
         self,
-        llm: LLMClient,
+        llm: Union[LLMClient, "LocalLoRABackend"],
         template: PromptTemplate,
         strategy: PromptingStrategy = PromptingStrategy.ZERO_SHOT,
     ) -> None:
@@ -92,5 +97,187 @@ class InferenceEngine:
         return {
             "template": self.template.to_dict(),
             "strategy": self.strategy.value,
-            "model": self.llm.model,
+            "model": getattr(self.llm, "model", "unknown"),
         }
+
+
+# ------------------------------------------------------------------
+# LocalLoRABackend — 学習済みアダプタを使ったローカル推論バックエンド
+# ------------------------------------------------------------------
+
+class LocalLoRABackend:
+    """学習済み LoRA アダプタを読み込んでローカルで推論するバックエンド。
+
+    LLMClient と同じ simple_prompt(system, user) → str インターフェースを持つ。
+    モデルは最初の呼び出し時に遅延ロードされる。
+
+    使い方::
+
+        backend = LocalLoRABackend(
+            adapter_path="models/run_xxx/adapter",
+        )
+        response = backend.simple_prompt(system, user)
+
+        # ベースモデルを明示的に指定する場合
+        backend = LocalLoRABackend(
+            adapter_path="models/run_xxx/adapter",
+            base_model="Qwen/Qwen2.5-7B-Instruct",
+        )
+    """
+
+    def __init__(
+        self,
+        adapter_path: str | Path,
+        base_model: Optional[str] = None,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+    ) -> None:
+        """
+        Args:
+            adapter_path:    LoRA アダプタのディレクトリ (train_lora.py が生成する adapter/ フォルダ)
+            base_model:      ベースモデルの HuggingFace ID またはローカルパス。
+                             省略時は adapter_path/../run_config.json から自動読み込み。
+            max_new_tokens:  最大生成トークン数
+            temperature:     生成温度 (0 で greedy デコード)
+        """
+        self.adapter_path = Path(adapter_path)
+        self._base_model_arg = base_model
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+
+        self._tokenizer = None
+        self._model = None
+
+    # ------------------------------------------------------------------
+    # LLMClient 互換プロパティ
+    # ------------------------------------------------------------------
+
+    @property
+    def model(self) -> str:
+        """to_dict() 互換: アダプタパスを識別子として返す。"""
+        return f"local:{self.adapter_path}"
+
+    # ------------------------------------------------------------------
+    # 公開 API (LLMClient と同じインターフェース)
+    # ------------------------------------------------------------------
+
+    def simple_prompt(self, system: str, user: str, **_kwargs) -> str:
+        """system + user を受け取り、学習済みモデルの応答を返す。
+
+        Args:
+            system: システムプロンプト
+            user:   ユーザープロンプト
+
+        Returns:
+            生成されたテキスト
+        """
+        if self._model is None:
+            self._load()
+        return self._generate(system, user)
+
+    # ------------------------------------------------------------------
+    # 非公開ヘルパー
+    # ------------------------------------------------------------------
+
+    def _resolve_base_model(self) -> str:
+        """ベースモデル名を解決する。"""
+        if self._base_model_arg:
+            return self._base_model_arg
+
+        # adapter_path/../run_config.json から読む
+        config_path = self.adapter_path.parent / "run_config.json"
+        if config_path.exists():
+            with open(config_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            base = cfg.get("base_model")
+            if base:
+                return base
+
+        raise ValueError(
+            f"base_model が特定できません。\n"
+            f"  --base-model で明示的に指定するか、\n"
+            f"  {config_path} に base_model が記録されていることを確認してください。"
+        )
+
+    def _load(self) -> None:
+        """トークナイザーとモデルを遅延ロードする (最初の呼び出し時に実行)。"""
+        import torch
+        from peft import PeftModel
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        base_model = self._resolve_base_model()
+
+        print(f"[LocalLoRABackend] トークナイザーを読み込み中: {self.adapter_path}")
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            str(self.adapter_path),
+            trust_remote_code=True,
+        )
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        dtype = (
+            torch.bfloat16
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+            else torch.float32
+        )
+
+        print(f"[LocalLoRABackend] ベースモデルを読み込み中: {base_model}")
+        base = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            torch_dtype=dtype,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+
+        print(f"[LocalLoRABackend] LoRA アダプタを適用中: {self.adapter_path}")
+        self._model = PeftModel.from_pretrained(base, str(self.adapter_path))
+        self._model.eval()
+        print("[LocalLoRABackend] 読み込み完了")
+
+    def _generate(self, system: str, user: str) -> str:
+        """プロンプトをトークナイズして生成し、応答テキストを返す。"""
+        import torch
+
+        # chat template でフォーマット (なければフォールバック)
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ]
+        try:
+            if getattr(self._tokenizer, "chat_template", None):
+                prompt_text = self._tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            else:
+                prompt_text = (
+                    f"### System:\n{system}\n\n"
+                    f"### User:\n{user}\n\n"
+                    f"### Assistant:\n"
+                )
+        except Exception:
+            prompt_text = (
+                f"### System:\n{system}\n\n"
+                f"### User:\n{user}\n\n"
+                f"### Assistant:\n"
+            )
+
+        inputs = self._tokenizer(prompt_text, return_tensors="pt")
+        device = next(self._model.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            output_ids = self._model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                temperature=self.temperature if self.temperature > 0 else None,
+                do_sample=self.temperature > 0,
+                pad_token_id=self._tokenizer.pad_token_id,
+                eos_token_id=self._tokenizer.eos_token_id,
+            )
+
+        # 入力トークンを除いた応答部分だけをデコード
+        input_len = inputs["input_ids"].shape[1]
+        generated_ids = output_ids[0, input_len:]
+        return self._tokenizer.decode(generated_ids, skip_special_tokens=True).strip()

@@ -7,7 +7,7 @@
 | Step 1  | PromptTemplate / InferenceEngine / baseline 評価 | ✅ 完了 |
 | Step 2  | DatasetBuilder (学習データ生成) | ✅ 完了 |
 | Step 3  | LoRA Trainer                  | ✅ 完了 |
-| Step 4  | LocalLoRA Backend (学習済み推論) | 🔲 未着手 |
+| Step 4  | LocalLoRA Backend (学習済み推論) | ✅ 完了 |
 | Step 5  | 実験管理 (config sweep / 結果比較) | 🔲 未着手 |
 
 ---
@@ -199,7 +199,7 @@ models/
 
 ---
 
-## Step 4 — LocalLoRA Backend (学習済みモデル推論) 🔲
+## Step 4 — LocalLoRA Backend (学習済みモデル推論) ✅
 
 ### 目的
 
