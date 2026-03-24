@@ -180,7 +180,7 @@ def run(args: argparse.Namespace) -> None:
             "summary": summary,
         })
 
-    # JSON 保存
+    # CSV / JSON 保存
     _save(args, steps, all_results)
 
 
@@ -225,38 +225,87 @@ def _print_summary(template_id: str, strategy: str, summary: dict) -> None:
 
 
 def _save(args: argparse.Namespace, steps: list[int], all_results: list[dict]) -> None:
-    """結果を JSON ファイルに保存する。"""
+    """結果を JSON / CSV ファイルに保存する。
+
+    出力ファイル:
+        baseline_steps_<ts>.csv   : ステップ単位の詳細 (1行 = 1設定 × 1ステップ)
+        baseline_summary.csv      : 設定ごとのサマリー (実行ごとに追記)
+    """
+    import csv
+
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    templates_str = "_".join(args.template)
-    filename = f"baseline_{templates_str}_{args.strategy}_{ts}.json"
-    out_path = out_dir / filename
+    ts    = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    model = args.model or "env:XRL_MODEL_NAME"
 
-    payload = {
-        "run_at":    ts,
-        "model":     args.model or "env:XRL_MODEL_NAME",
-        "steps":     steps,
-        "prior_info_mode": args.prior_info,
-        "results":   all_results,
-    }
+    # ------------------------------------------------------------------
+    # 1. ステップ単位 CSV (毎回新規ファイル)
+    # ------------------------------------------------------------------
+    steps_csv = out_dir / f"baseline_steps_{ts}.csv"
+    step_fields = [
+        "run_at", "model", "template_id", "strategy", "prior_info_mode",
+        "step", "soundness", "fidelity", "total", "reason",
+    ]
+    with steps_csv.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=step_fields)
+        writer.writeheader()
+        for run in all_results:
+            cfg = run["config"]
+            tpl_id   = cfg["template"]["template_id"]
+            strategy = cfg["strategy"]
+            prior    = cfg["prior_info_mode"]
+            for sr in run["steps"]:
+                ev = sr.get("eval", {})
+                s  = ev.get("soundness", 0)
+                fi = ev.get("fidelity",  0)
+                writer.writerow({
+                    "run_at":          ts,
+                    "model":           model,
+                    "template_id":     tpl_id,
+                    "strategy":        strategy,
+                    "prior_info_mode": prior,
+                    "step":            sr["step"],
+                    "soundness":       s,
+                    "fidelity":        fi,
+                    "total":           s + fi,
+                    "reason":          ev.get("reason", ""),
+                })
+    print(f"\n[保存完了] {steps_csv}  (ステップ詳細)")
 
-    def _clean(obj):
-        if isinstance(obj, dict):
-            return {k: _clean(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_clean(v) for v in obj]
-        try:
-            return float(obj)
-        except (TypeError, ValueError):
-            return obj
-
-    out_path.write_text(
-        json.dumps(_clean(payload), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    print(f"\n[保存完了] {out_path}")
+    # ------------------------------------------------------------------
+    # 2. サマリー CSV (実行ごとに追記)
+    # ------------------------------------------------------------------
+    summary_csv = out_dir / "baseline_summary.csv"
+    summary_fields = [
+        "run_at", "model", "template_id", "strategy", "prior_info_mode",
+        "n_steps",
+        "soundness_mean", "soundness_std",
+        "fidelity_mean",  "fidelity_std",
+        "total_mean",
+    ]
+    write_header = not summary_csv.exists()
+    with summary_csv.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=summary_fields)
+        if write_header:
+            writer.writeheader()
+        for run in all_results:
+            cfg = run["config"]
+            sm  = run["summary"]
+            writer.writerow({
+                "run_at":          ts,
+                "model":           model,
+                "template_id":     cfg["template"]["template_id"],
+                "strategy":        cfg["strategy"],
+                "prior_info_mode": cfg["prior_info_mode"],
+                "n_steps":         sm["n_steps"],
+                "soundness_mean":  sm["soundness_mean"],
+                "soundness_std":   sm.get("soundness_std", ""),
+                "fidelity_mean":   sm["fidelity_mean"],
+                "fidelity_std":    sm.get("fidelity_std", ""),
+                "total_mean":      sm["total_mean"],
+            })
+    print(f"[保存完了] {summary_csv}  (サマリー・追記)")
 
 
 # ------------------------------------------------------------------
