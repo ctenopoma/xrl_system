@@ -5,6 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
+    "accelerate",
+    "datasets",
     "geographiclib",
     "gymnasium",
     "icecream",
@@ -13,9 +15,12 @@ dependencies = [
     "matplotlib>=3.7.5",
     "numpy>=1.24.4",
     "pandas>=2.0.3",
+    "peft",
     "pymap3d",
     "python-dotenv>=1.0.1",
     "setproctitle",
     "torch",
+    "transformers",
+    "trl",
     "wandb",
 ]
