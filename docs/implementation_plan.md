@@ -242,7 +242,7 @@ uv run python evaluate_baseline.py --sample 20 \
 
 ---
 
-## Step 5 — 実験管理 (config sweep / 結果比較) 🔲
+## Step 5 — 実験管理 (config sweep / 結果比較) ✅
 
 ### 目的
 
@@ -294,8 +294,8 @@ uv run python compare_results.py \
 
 ### 確認観点
 
-- [ ] ベースライン (学習なし) との差分が正しく計算されているか
-- [ ] 設定の再現に必要な情報が全て `baseline_summary.csv` に記録されているか
+- [x] ベースライン (学習なし) との差分が正しく計算されているか
+- [x] 設定の再現に必要な情報が全て `baseline_summary.csv` に記録されているか
 
 ---
 

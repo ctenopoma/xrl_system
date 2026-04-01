@@ -92,8 +92,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="使用するプロンプトテンプレート (複数指定で一括比較)",
     )
     p.add_argument(
-        "--strategy", choices=["zero_shot", "cot"], default="zero_shot",
+        "--strategy",
+        choices=["zero_shot", "cot", "mcts", "sysllm", "agent"],
+        default="zero_shot",
         help="プロンプト戦略 (デフォルト: zero_shot)",
+    )
+    p.add_argument(
+        "--mcts-iterations", type=int, default=4,
+        dest="mcts_iterations",
+        help="MCTS 戦略のイテレーション数 (デフォルト: 4)",
     )
     p.add_argument(
         "--prior-info", choices=["none", "sysllm"], default="none",
@@ -218,6 +225,8 @@ def run(args: argparse.Namespace) -> None:
             llm=gen_backend,
             template=tpl,
             strategy=PromptingStrategy(args.strategy),
+            loader=loader,
+            mcts_iterations=args.mcts_iterations,
         )
 
         step_results: list[dict] = []
@@ -473,6 +482,7 @@ def _save(args: argparse.Namespace, steps: list[int], all_results: list[dict]) -
                     "total":           s + fi,
                     "explanation":     sr.get("explanation", ""),
                     "reason":          ev.get("reason", ""),
+                    "explanation":     sr.get("explanation", ""),
                 })
     print(f"\n[保存完了] {steps_csv}  (ステップ詳細)")
 
