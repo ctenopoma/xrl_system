@@ -51,8 +51,12 @@ from modules.data_loader import DataLoader
 from modules.evaluator import EpisodeEvaluator
 from modules.inference_engine import InferenceEngine, LocalLoRABackend, PromptingStrategy
 from modules.llm_client import LLMClient
+from modules.mcts_xrl import MCTSXRL
 from modules.prompt_template import PromptTemplate, PRESETS
 from modules.sysllm import SySLLM
+from modules.talktoagent import TalkToAgent
+
+METHOD_CHOICES = ["zero_shot", "cot", "mcts", "sysllm", "agent"]
 
 
 # ------------------------------------------------------------------
@@ -72,6 +76,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--sample", type=int, default=10,
         help="--steps 未指定時にランダムサンプリングするステップ数 (デフォルト: 10)",
+    )
+    p.add_argument(
+        "--method", nargs="+",
+        choices=METHOD_CHOICES, default=None,
+        help=(
+            "比較する XRL 手法 (複数指定で一括比較)。"
+            " 指定すると --template/--strategy を上書きして手法軸で比較する。"
+            f" 選択肢: {METHOD_CHOICES}"
+        ),
     )
     p.add_argument(
         "--template", nargs="+",
@@ -169,11 +182,22 @@ def run(args: argparse.Namespace) -> None:
     steps = _resolve_steps(args, loader)
     print(f"評価ステップ: {steps}")
 
+    # ------------------------------------------------------------------
+    # --method モード: XRL 手法を横断比較
+    # ------------------------------------------------------------------
+    if args.method:
+        all_results = _run_method_comparison(args, loader, gen_backend, judge, steps)
+        _save(args, steps, all_results)
+        return
+
+    # ------------------------------------------------------------------
+    # 従来モード: --template × --strategy
+    # ------------------------------------------------------------------
+
     # SySLLM 事前情報を先に生成 (必要な場合のみ)
     sysllm_summary = ""
     if args.prior_info == "sysllm":
         print("\n[SySLLM] エピソード要約を生成中...")
-        # SySLLM は常に外部 API を使用
         sys_result = SySLLM(judge_llm, loader).analyze()
         sysllm_summary = sys_result.get("overall_summary", "")
         print(f"  → {sysllm_summary[:100]}...")
@@ -234,6 +258,7 @@ def run(args: argparse.Namespace) -> None:
         _print_summary(template_id, args.strategy, summary)
 
         all_results.append({
+            "method": f"{template_id}/{args.strategy}",
             "config": {
                 **engine.to_dict(),
                 "prior_info_mode": args.prior_info,
@@ -251,6 +276,115 @@ def run(args: argparse.Namespace) -> None:
 # ------------------------------------------------------------------
 # ヘルパー
 # ------------------------------------------------------------------
+
+def _generate_for_method(
+    method: str,
+    step: int,
+    context,
+    engines: dict,
+    mcts_xrl: "MCTSXRL",
+    talk_agent: "TalkToAgent",
+    sysllm_summary: str,
+) -> str:
+    """指定手法でステップの説明文を生成して返す。"""
+    if method == "zero_shot":
+        return engines["zero_shot"].generate(context)
+    if method == "cot":
+        return engines["cot"].generate(context)
+    if method == "mcts":
+        return mcts_xrl.explain_mcts(step)["explanation"]
+    if method == "sysllm":
+        return engines["sysllm"].generate(context, prior_info=sysllm_summary)
+    if method == "agent":
+        query = f"Step {step} でエージェントがなぜその操舵をしたのか詳しく説明してください。"
+        return talk_agent.answer(query)["explanation"]
+    raise ValueError(f"未知の手法: {method}")
+
+
+def _run_method_comparison(
+    args: argparse.Namespace,
+    loader: DataLoader,
+    gen_backend,
+    judge: "EpisodeEvaluator",
+    steps: list[int],
+) -> list[dict]:
+    """--method モード: 全指定手法を同一ステップで評価して結果リストを返す。"""
+    # エンジン群の初期化
+    engines = {
+        "zero_shot": InferenceEngine(
+            gen_backend, PromptTemplate.from_preset("v1_basic"),
+            strategy=PromptingStrategy.ZERO_SHOT,
+        ),
+        "cot": InferenceEngine(
+            gen_backend, PromptTemplate.from_preset("v1_basic"),
+            strategy=PromptingStrategy.COT,
+        ),
+        "sysllm": InferenceEngine(
+            gen_backend, PromptTemplate.from_preset("v2_with_prior"),
+            strategy=PromptingStrategy.ZERO_SHOT,
+        ),
+    }
+    mcts_xrl   = MCTSXRL(gen_backend, loader)
+    talk_agent = TalkToAgent(gen_backend, loader)
+
+    # sysllm 手法が含まれる場合のみエピソード要約を事前生成
+    sysllm_summary = ""
+    if "sysllm" in args.method:
+        print("\n[SySLLM] エピソード要約を生成中...")
+        sys_result    = SySLLM(gen_backend, loader).analyze()
+        sysllm_summary = sys_result.get("overall_summary", "")
+        print(f"  → {sysllm_summary[:100]}...")
+
+    all_results: list[dict] = []
+
+    for method in args.method:
+        print(f"\n{'=' * 60}")
+        print(f"手法: {method}")
+        print("=" * 60)
+
+        step_results: list[dict] = []
+        for step in steps:
+            print(f"\n  [Step {step}] {method} 生成中...", end=" ", flush=True)
+            try:
+                context     = loader.get_step_context(step)
+                explanation = _generate_for_method(
+                    method, step, context,
+                    engines, mcts_xrl, talk_agent, sysllm_summary,
+                )
+                eval_result = judge.evaluate(explanation, context=context)
+                total = eval_result.get("soundness", 0) + eval_result.get("fidelity", 0)
+                print(f"Soundness={eval_result['soundness']}/2 Fidelity={eval_result['fidelity']}/2 合計={total}/4")
+                step_results.append({
+                    "step":        step,
+                    "explanation": explanation,
+                    "eval":        eval_result,
+                })
+            except Exception as e:
+                print(f"エラー: {e}")
+                step_results.append({
+                    "step":  step,
+                    "error": str(e),
+                    "eval":  {"soundness": 0, "fidelity": 0, "reason": str(e)},
+                })
+
+        summary = _summarize(step_results)
+        _print_summary(method, "-", summary)
+
+        all_results.append({
+            "method":  method,
+            "config":  {
+                "template": {"template_id": method},
+                "strategy": method,
+                "prior_info_mode": "sysllm" if method == "sysllm" else "none",
+                "backend": args.backend,
+                "adapter": args.adapter or "",
+            },
+            "steps":   step_results,
+            "summary": summary,
+        })
+
+    return all_results
+
 
 def _resolve_steps(args: argparse.Namespace, loader: DataLoader) -> list[int]:
     """評価ステップリストを決定する。"""
@@ -313,8 +447,8 @@ def _save(args: argparse.Namespace, steps: list[int], all_results: list[dict]) -
     # ------------------------------------------------------------------
     steps_csv = out_dir / f"baseline_steps_{ts}.csv"
     step_fields = [
-        "run_at", "model", "backend", "template_id", "strategy", "prior_info_mode",
-        "step", "soundness", "fidelity", "total", "reason",
+        "run_at", "model", "backend", "method", "template_id", "strategy", "prior_info_mode",
+        "step", "soundness", "fidelity", "total", "explanation", "reason",
     ]
     with steps_csv.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=step_fields)
@@ -329,6 +463,7 @@ def _save(args: argparse.Namespace, steps: list[int], all_results: list[dict]) -
                     "run_at":          ts,
                     "model":           model,
                     "backend":         cfg.get("backend", "external"),
+                    "method":          run.get("method", ""),
                     "template_id":     cfg["template"]["template_id"],
                     "strategy":        cfg["strategy"],
                     "prior_info_mode": cfg["prior_info_mode"],
@@ -336,6 +471,7 @@ def _save(args: argparse.Namespace, steps: list[int], all_results: list[dict]) -
                     "soundness":       s,
                     "fidelity":        fi,
                     "total":           s + fi,
+                    "explanation":     sr.get("explanation", ""),
                     "reason":          ev.get("reason", ""),
                 })
     print(f"\n[保存完了] {steps_csv}  (ステップ詳細)")
@@ -345,7 +481,7 @@ def _save(args: argparse.Namespace, steps: list[int], all_results: list[dict]) -
     # ------------------------------------------------------------------
     summary_csv = out_dir / "baseline_summary.csv"
     summary_fields = [
-        "run_at", "model", "backend", "template_id", "strategy", "prior_info_mode",
+        "run_at", "model", "backend", "method", "template_id", "strategy", "prior_info_mode",
         "n_steps",
         "soundness_mean", "soundness_std",
         "fidelity_mean",  "fidelity_std",
@@ -363,6 +499,7 @@ def _save(args: argparse.Namespace, steps: list[int], all_results: list[dict]) -
                 "run_at":          ts,
                 "model":           model,
                 "backend":         cfg.get("backend", "external"),
+                "method":          run.get("method", ""),
                 "template_id":     cfg["template"]["template_id"],
                 "strategy":        cfg["strategy"],
                 "prior_info_mode": cfg["prior_info_mode"],
