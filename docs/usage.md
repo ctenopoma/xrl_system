@@ -317,3 +317,185 @@ CLI の `--model` 引数は環境変数より優先されます。
 
 - `--max-rows` を小さくしてトークン数を減らすか、逆に大きくして情報量を増やしてみてください。
 - LLM の `max_tokens` 設定（`LLMClient` のデフォルト 2048）を変更することも可能です。
+
+---
+
+## 9. evaluate_baseline.py — 学習なしベースライン評価
+
+`evaluate_baseline.py` は複数の XRL 手法・プロンプトテンプレートを **同一ステップで評価・比較** し、スコアと説明文を CSV に記録するスクリプトです。
+
+### 基本的な使い方
+
+```bash
+# デフォルト設定 (v1_basic × zero_shot) で 10 ステップをランダム評価
+uv run python evaluate_baseline.py
+
+# ステップを指定して評価
+uv run python evaluate_baseline.py --steps 50 100 150
+
+# ランダムサンプリング数を指定
+uv run python evaluate_baseline.py --sample 20
+```
+
+---
+
+### 9-1. XRL 手法を一括比較する（`--method`）
+
+`--method` に手法名を並べると、**同じステップを全手法で評価**して結果を一つの CSV にまとめます。
+
+```bash
+# 全5手法を一括比較
+uv run python evaluate_baseline.py --sample 10 \
+    --method zero_shot cot mcts sysllm agent
+
+# 任意の組み合わせだけ比較
+uv run python evaluate_baseline.py --steps 50 100 150 \
+    --method zero_shot cot mcts
+```
+
+| 手法 | 動作 |
+| --- | --- |
+| `zero_shot` | `v1_basic` テンプレートをそのまま送信 |
+| `cot` | `v1_basic` + "Chain-of-Thought で推論してから…" を追記 |
+| `mcts` | Generator→Critic→Refiner×4回で自己改善した最良説明を返す |
+| `sysllm` | エピソード要約を生成し `v2_with_prior` テンプレートに注入 |
+| `agent` | TalkToAgent が Pandas コードを自動生成・実行して説明 |
+
+> **コスト注意**: `mcts` は 1 ステップあたり LLM を 4〜5 回呼び出します。`agent` も Pandas 実行ループがあります。最初は `--sample 5` 程度で試してください。
+
+---
+
+### 9-2. プロンプトテンプレートを変えながら比較する（`--template`）
+
+`--method` を使わない従来モードでは、`--template` でプリセットを複数指定して比較できます。
+
+```bash
+# 3テンプレートを同ステップで比較
+uv run python evaluate_baseline.py --steps 50 100 150 \
+    --template v1_basic v1_combat_only v2_with_prior
+
+# CoT 戦略で比較
+uv run python evaluate_baseline.py --steps 50 100 150 \
+    --template v1_basic v1_combat_only --strategy cot
+
+# SySLLM 要約を事前情報として注入
+uv run python evaluate_baseline.py --steps 50 100 150 \
+    --template v2_with_prior --prior-info sysllm
+```
+
+#### 既存プリセット一覧
+
+| preset id | 特徴量 | センサー説明 | 事前情報スロット |
+| --- | --- | --- | --- |
+| `v1_basic` | 全5列 + 操舵3列 | あり | なし |
+| `v1_combat_only` | distance, ata, aspect_angle のみ | あり | なし |
+| `v2_with_prior` | 全5列 + 操舵3列 | あり | あり（SySLLM 要約などを注入可能） |
+
+---
+
+### 9-3. プロンプトを変更する方法
+
+プロンプトの編集場所は変えたい内容によって異なります。すべて `modules/prompt_template.py` に集約されています。
+
+#### A. 指示文・質問文を変えたい（最も頻繁）
+
+`_build_user()` メソッド末尾の文字列を編集します。
+
+```python
+# 変更前（modules/prompt_template.py 206〜209行あたり）
+"この操舵入力をエージェントが選択した理由を、センサーデータの数値に基づいて説明してください。"
+f"{self.config.output_length_hint}程度でまとめてください。"
+
+# 例：出力形式を指定する
+"この操舵入力を選択した理由を以下の形式で説明してください:\n"
+"1. 脅威状況の評価\n2. 選択した行動とその根拠\n3. 期待される効果"
+```
+
+#### B. system プロンプトのロール・前提を変えたい
+
+`_build_system()` メソッドの文字列を編集します。
+
+```python
+# 変更前（modules/prompt_template.py 186〜190行あたり）
+"あなたは空中戦シミュレーターの行動分析専門家です。\n"
+"強化学習エージェントが特定のステップで行った操舵入力の理由を、"
+"センサーデータに基づいて論理的に説明してください。\n"
+```
+
+#### C. 新しいバリエーションをプリセットとして追加したい（推奨）
+
+`PRESETS` 辞書に追記するだけで `--template` から使えます。
+
+```python
+# modules/prompt_template.py の PRESETS に追記
+PRESETS["v3_concise"] = PromptTemplateConfig(
+    template_id="v3_concise",
+    state_features=list(STATE_COLS),
+    action_features=list(ACTION_COLS),
+    include_sensor_desc=False,    # センサー説明なし
+    output_length_hint="100字以内",
+)
+```
+
+```bash
+# 追加後すぐに使える
+uv run python evaluate_baseline.py --steps 50 100 150 \
+    --template v1_basic v3_concise
+```
+
+#### D. 出力文字数の指示だけ変えたい
+
+`PRESETS` の `output_length_hint` を書き換えるだけです。
+
+```python
+"v1_basic": PromptTemplateConfig(
+    ...
+    output_length_hint="50〜100字",   # ここだけ変更
+),
+```
+
+---
+
+### 9-4. 出力ファイル
+
+| ファイル | 内容 |
+| --- | --- |
+| `results/baseline/baseline_steps_<ts>.csv` | ステップ単位の詳細（毎回新規） |
+| `results/baseline/baseline_summary.csv` | 設定ごとのサマリー（実行ごとに追記） |
+
+#### baseline_steps CSV の列
+
+```text
+run_at, model, backend, method, template_id, strategy, prior_info_mode,
+step, soundness, fidelity, total, explanation, reason
+```
+
+- `method` : `--method` モード時は手法名、従来モード時は `{template_id}/{strategy}`
+- `explanation` : LLM が生成した説明テキスト本文
+- `reason` : Judge（採点 LLM）の採点理由
+
+#### baseline_summary CSV の列
+
+```text
+run_at, model, backend, method, template_id, strategy, prior_info_mode,
+n_steps, soundness_mean, soundness_std, fidelity_mean, fidelity_std, total_mean
+```
+
+---
+
+### 9-5. 典型的な実験フロー
+
+```bash
+# Step 1. 手法比較（まず少ないサンプルで確認）
+uv run python evaluate_baseline.py --sample 5 \
+    --method zero_shot cot mcts
+
+# Step 2. 良さそうな手法に絞ってプロンプトを調整
+#   → modules/prompt_template.py の PRESETS に新バリアントを追加
+
+# Step 3. プロンプトバリアントを比較
+uv run python evaluate_baseline.py --sample 20 \
+    --template v1_basic v3_concise --strategy zero_shot
+
+# Step 4. baseline_summary.csv を開いて method/template_id 列で比較
+```
