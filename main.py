@@ -129,7 +129,7 @@ def run(args: argparse.Namespace) -> None:
         print("=" * 60)
         print("[SySLLM] エピソード全体の戦術を分析中...")
         print("=" * 60)
-        result = SySLLM(llm, loader).analyze(max_rows=args.max_rows)
+        result = SySLLM(llm, loader).analyze()
         _print_sysllm_result(result)
 
     elif args.method == "cot":
@@ -202,7 +202,7 @@ def _run_compare(args: argparse.Namespace, llm: LLMClient, loader: DataLoader) -
     print("\n" + "=" * 60)
     print("[2/4] SySLLM: エピソード全体を分析中...")
     print("=" * 60)
-    sys_result = SySLLM(llm, loader).analyze(max_rows=args.max_rows)
+    sys_result = SySLLM(llm, loader).analyze()
     _print_sysllm_result(sys_result)
     sys_eval = judge.evaluate(sys_result["overall_summary"], trajectory_text=traj)
     _print_eval(sys_eval)

@@ -4,10 +4,12 @@ litellm を薄くラップし、環境変数またはコンストラクタ引数
 全モジュールはこのクラスだけに依存させることで、モデル変更やテスト時のモック差し替えを容易にする。
 
 設定は .env ファイルまたは環境変数で行う。
-  XRL_MODEL_NAME  : litellm モデル名 (例: openai/Qwen3.5-9B, gpt-4o)
-  XRL_API_BASE    : エンドポイントURL (例: http://localhost:8088/v1)
-  XRL_API_KEY     : APIキー (ローカルサーバーは "dummy" でOK)
-  XRL_MAX_TOKENS  : 最大生成トークン数 (デフォルト: 2048)
+  XRL_MODEL_NAME       : litellm モデル名 (例: openai/Qwen3.5-9B, gpt-4o)
+  XRL_API_BASE         : LLM エンドポイントURL (例: http://localhost:8088/v1)
+  XRL_API_KEY          : APIキー (ローカルサーバーは "dummy" でOK)
+  XRL_MAX_TOKENS       : 最大生成トークン数 (デフォルト: 2048)
+  XRL_EMBED_MODEL_NAME : 埋め込みモデル名 (デフォルト: text-embedding-3-small)
+  XRL_EMBED_API_BASE   : 埋め込み専用エンドポイントURL (省略時は XRL_API_BASE を流用)
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 import litellm
+import numpy as np
 
 # プロジェクトルートの .env を自動ロード (python-dotenv がなければスキップ)
 def _load_dotenv() -> None:
@@ -48,12 +51,17 @@ class LLMClient:
         api_base: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        embed_model: Optional[str] = None,
     ) -> None:
         self.model = model or os.environ.get("XRL_MODEL_NAME", "gpt-4o")
         self.api_key = api_key or os.environ.get("XRL_API_KEY")
         self.api_base = api_base or os.environ.get("XRL_API_BASE")
         self.temperature = temperature
         self.max_tokens = max_tokens or int(os.environ.get("XRL_MAX_TOKENS", "2048"))
+        self.embed_model = embed_model or os.environ.get(
+            "XRL_EMBED_MODEL_NAME", "text-embedding-3-small"
+        )
+        self.embed_api_base = os.environ.get("XRL_EMBED_API_BASE") or self.api_base
 
     # ------------------------------------------------------------------
     # 公開API
@@ -114,3 +122,25 @@ class LLMClient:
             ],
             **kwargs,
         )
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        """テキストリストを埋め込みベクトルに変換する。
+
+        Args:
+            texts: 埋め込むテキストのリスト
+
+        Returns:
+            shape (len(texts), dim) の numpy 配列
+        """
+        kwargs: dict = {
+            "model": self.embed_model,
+            "input": texts,
+        }
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.embed_api_base:
+            kwargs["api_base"] = self.embed_api_base
+
+        response = litellm.embedding(**kwargs)
+        vectors = [item["embedding"] for item in response.data]
+        return np.array(vectors, dtype=np.float32)

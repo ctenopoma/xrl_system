@@ -33,7 +33,7 @@ class DataLoader:
 
         loader = DataLoader("data/trajectory_log.csv")
         df = loader.load()                   # CSV 読み込み (なければダミー生成)
-        text = loader.to_trajectory_text()   # SySLLM 用テキスト化
+        text = loader.to_trajectory_text()   # テキスト化
         ctx = loader.get_step_context(150)   # 特定ステップの状態取得
     """
 
@@ -138,7 +138,7 @@ class DataLoader:
     def filter_keyframes(
         self, df: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
-        """SySLLM 向けキーフレーム抽出。
+        """キーフレーム抽出 (LAG など他手法向け。SySLLM では使用しない)。
 
         以下のいずれかを満たす行を抽出する:
             - ata < ATA_ATTACK_THRESHOLD (攻撃機会)
