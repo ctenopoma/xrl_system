@@ -21,7 +21,7 @@ eval_strategy: zero_shot
 # ---- スイープ軸 (リストにした項目が全組み合わせで実行される) ----
 
 # プロンプトテンプレート
-template: [v1_basic, v1_combat_only]
+template: [v1_basic, v1_combat_only, v3_few_shot]
 
 # ラベル生成手法
 label_source: [cot, mcts]

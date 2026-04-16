@@ -43,12 +43,6 @@ class PromptingStrategy(str, Enum):
     AGENT     = "agent"
 
 
-_COT_SUFFIX = (
-    "\n\nまず手順を追って論理的に推論し (Chain-of-Thought)、"
-    "最後に結論を簡潔にまとめてください。"
-)
-
-
 # ------------------------------------------------------------------
 # InferenceEngine
 # ------------------------------------------------------------------
@@ -134,7 +128,7 @@ class InferenceEngine:
         # zero_shot / cot
         system, user = self.template.format_step(context, prior_info)
         if self.strategy == PromptingStrategy.COT:
-            user += _COT_SUFFIX
+            user += self.template.build_cot_suffix()
         return self.llm.simple_prompt(system, user)
 
     def to_dict(self) -> dict:
